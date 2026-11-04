@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>系统架构图 · 多 Agent 智能客服运营中台</title>
+<style>
+  body { background: #0f1117; color: #e4e6ef; font-family: -apple-system, "PingFang SC", sans-serif; margin: 0; padding: 24px; }
+  h1 { font-size: 18px; margin-bottom: 20px; color: #6c8cff; }
+  .mermaid { background: #1a1d27; border-radius: 12px; padding: 30px; border: 1px solid #2e3348; }
+  .legend { margin-top: 16px; font-size: 12px; color: #8b90a5; line-height: 1.8; }
+  .legend b { color: #e4e6ef; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+<h1>多 Agent 智能客服运营中台 · 系统架构</h1>
+<div class="mermaid">
+flowchart TB
+    subgraph Client["客户端"]
+        UI["浏览器演示页<br/>static/index.html"]
+    end
+
+    subgraph Gateway["FastAPI 入口 · main.py"]
+        direction LR
+        HEALTH["GET /health"]
+        CHAT["POST /api/chat/stream<br/>SSE 流式"]
+        RESUME["POST /api/human/resume<br/>人工审批断点恢复"]
+    end
+
+    subgraph Receptionist["接待员 · unified_chat.py"]
+        direction TB
+        F1["① 零 Token 规则拦截<br/>空串 / 违规词 / Redis 幂等"]
+        F2["② MiniLM 本地意图分类<br/>embedding + cosine ≥ 0.62"]
+        F3["③ LLM 兜底路由<br/>qwen/deepseek 分类"]
+        F1 --> F2 --> F3
+    end
+
+    subgraph Orchestrator["调度台 · orchestrator.py"]
+        direction TB
+        SINGLE["单 Agent 直达"]
+        PIPE["Pipeline 串行编排<br/>风险拦截 → 售后审批"]
+    end
+
+    subgraph Agents["业务 Agents · LangGraph"]
+        direction TB
+        RA["规则审核 Agent<br/>RAG 检索 + 三专家并行评审<br/>interrupt → 人工审批"]
+        OA["订单履约 Agent<br/>订单状态查询/回复"]
+        AA["售后审批 Agent<br/>风险短路 → 审批 interrupt"]
+    end
+
+    subgraph Foundation["Foundation 基础设施层"]
+        direction LR
+        MF["model_factory.py<br/>LLM / MiniLM / BGE 工厂"]
+        ST["storage.py<br/>PG / Redis / Milvus<br/>降级内存模式"]
+        CM["common.py<br/>SSE 封装 / 三层重试 / 审计"]
+        MCP["mcp_client.py<br/>外部工具接入"]
+    end
+
+    subgraph LLM["模型层"]
+        direction LR
+        DASHSCOPE["DashScope / 百炼<br/>deepseek-v4.1-flash"]
+        MINILM["MiniLM 本地模型<br/>（可选，未配置降级 LLM）"]
+    end
+
+    UI -->|"SSE"| CHAT
+    CHAT --> Receptionist
+    Receptionist -->|"label"| Orchestrator
+    Orchestrator --> SINGLE
+    Orchestrator --> PIPE
+    SINGLE --> RA
+    SINGLE --> OA
+    PIPE --> RA
+    PIPE --> AA
+    RESUME -->|"Command(resume=)"| RA
+    RESUME -->|"Command(resume=)"| AA
+
+    RA --> MF
+    OA --> MF
+    AA --> MF
+    Receptionist --> MF
+    MF --> DASHSCOPE
+    MF --> MINILM
+    RA --> ST
+    AA --> ST
+    Receptionist --> ST
+    Agents --> CM
+    MCP -.->|"可选"| Agents
+
+    style F1 fill:#1a3a2a,stroke:#3ddc97,color:#3ddc97
+    style F2 fill:#1a2a3a,stroke:#6c8cff,color:#6c8cff
+    style F3 fill:#2a1a3a,stroke:#b57bff,color:#b57bff
+    style RA fill:#2a2010,stroke:#ffb454,color:#ffb454
+    style AA fill:#2a2010,stroke:#ffb454,color:#ffb454
+    style PIPE fill:#1a2a3a,stroke:#6c8cff,color:#6c8cff
+</div>
+<div class="legend">
+  <b>三层意图识别漏斗：</b>规则拦截（0 成本）→ MiniLM embedding（0 Token）→ LLM 兜底（有成本）<br/>
+  <b>两种调度形态：</b>单 Agent 直达（订单/规则）｜ Pipeline 串行（售后=风险拦截+审批）<br/>
+  <b>人工审批：</b>LangGraph interrupt → 前端弹窗 → /api/human/resume → Command(resume=) 断点续跑
+</div>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: { primaryColor: '#1a1d27', primaryTextColor: '#e4e6ef', primaryBorderColor: '#2e3348', lineColor: '#6c8cff' } });
+</script>
+</body>
+</html>
